@@ -265,10 +265,16 @@ nav + .container {
   bottom: 0;
   left: 0;
   right: 0;
-  z-index: 1;
+
+  /* CHANGES MADE */
+  z-index: -1;
+
+  pointer-events: none;
 }
 
-#messages .list-group-item a:not(.message-link) {
+#messages .list-group-item a:not(.message-link) 
+/* CHANGES MADE */
+#messages .list-group-item .like-btn {
   position: relative;
   z-index: 2;
 }

@@ -370,6 +370,18 @@ def homepage():
         return render_template('home-anon.html')
 
 
+# When a user tries to access a resource (such as a webpage) that doesn't exist on the server.
+# 404 means "Not Found"
+# Create a 404 error handler with `@app.errorhandler` decorator
+# This decorator tells Flask to handle 404 errors with `page_not_found` function
+@app.errorhandler(404)
+def page_not_found(e):
+    """ custom 404 error page """
+
+    # `, 404`: sets the status code of the HTTP response to 404
+    # without `, 404`, Flask would return a `200 OK` response along with `404.html`
+    return render_template('404.html', error=e), 404
+
 ##############################################################################
 # Turn off all caching in Flask
 #   (useful for dev; in production, this kind of stuff is typically

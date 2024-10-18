@@ -159,3 +159,23 @@ The purpose of it is checking if user is logged in and store the user in the `g`
 ## What does `@app.before_request` mean?
 
 The `@app.before_request` decorator defines a function that runs before any request is handled. 
+
+# Adding AJAX 
+
+1.  Like/unlike a warble using AJAX
+
+    When a user clicks the "like" or "unlike" button, we will use Axios to send a request to the server
+    without reloading the page. We can modify the appearance of the like button dynamically based on the response from the server. 
+
+    1.  Include Axios using a CDN link.
+    2.  Backend: Create a route to handle the like/unlike logic in `app.py`
+    3.  Frontend: Use Axios to send AJAX requests for liking/unliking 
+
+    **PROBLEM**
+
+    -   The like button is not clickable.
+
+        -   Ensured set up (CDN link, CSS file, JS file etc.)
+        -   Ensured HTML structure 
+        -   Checked CSS
+            -   Now, I suspect the `.message-link` is blocking the button since it has `z-index: 1`. I adjusted a couple of CSS rules but it's not being reflected on the webpage.  

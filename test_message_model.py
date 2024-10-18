@@ -13,8 +13,6 @@ from app import app, CURR_USER_KEY
 
 db.create_all()
 
-# TODO: Do I need CSRF key in models testing?
-
 # For tests to work, need to disable CSRF checking in tests
 app.config['WTF_CSRF_ENABLED'] = False
 # Make Flask errors be real errors, not HTML pages with error info
@@ -30,6 +28,7 @@ class MessageModelTestCase(TestCase):
     def setUp(self):
         """Create test client, add sample data."""
 
+        # deletes all rows (records) while keeping the table structure intact.
         User.query.delete()
         Message.query.delete()
         Follows.query.delete()
@@ -37,30 +36,38 @@ class MessageModelTestCase(TestCase):
         # Sets up a test client to simulate requests to the app
         self.client = app.test_client()
 
+        self.user = User.signup(
+            username="testuser",
+            email="test@test.com",
+            password="HASHED_PASSWORD",
+            image_url="/static/images/default-pic.png"
+        )
+
+        # finalizes all the changes made to the database
+        db.session.commit()
+
 
     def tearDown(self):
         """ Clean up database after each test"""
 
+        # Clear the current session
         db.session.remove()
 
-    
+
     # 1. Does the message model work as expected?
     def test_message_model(self):
         """ test basic message model """
 
         # Create a valid user for testing (owner of messages)
-        u = User(
-            email="test@test.com",
-            username="testuser",
-            password="HASHED_PASSWORD",
-        )
+        u = self.user
 
         # Create a message and associate it with the user
         msg = Message(text="testing message model")
 
+        # Associate the message with the user
         u.messages.append(msg)
 
-        db.session.add(u)
+        # finalizes all the changes made to the database
         db.session.commit()
 
         # Check the message text is correct
@@ -83,11 +90,7 @@ class MessageModelTestCase(TestCase):
         """ test the one-to-many relationship between User and Message models """
 
         # Create a valid user for testing (owner of messages)
-        u = User(
-            email="test@test.com",
-            username="testuser",
-            password="HASHED_PASSWORD",
-        )
+        u = self.user
 
         # Create two messages
         msg_one = Message(text="first testing message")
@@ -97,7 +100,7 @@ class MessageModelTestCase(TestCase):
         u.messages.append(msg_one)
         u.messages.append(msg_two)
 
-        db.session.add(u)
+        # finalizes all the changes made to the database
         db.session.commit()
 
         # User should have two messages
@@ -114,24 +117,28 @@ class MessageModelTestCase(TestCase):
 
     # 7. Does Message fail to create a new message if non-nullable fields fail?
     def test_message_without_text(self):
-        """ test new message failed due to missing test field """
+        """ test new message failed due to missing text field """
 
         # Create a valid user for testing (owner of messages)
-        u = User(
-            email="test@test.com",
-            username="testuser",
-            password="HASHED_PASSWORD",
-        )
+        u = self.user
 
+        # Create a message object without text field
         invalid_text = Message(text=None)
 
         # Associate message with the user
         u.messages.append(invalid_text)
-        db.session.add(u)
 
+        
+        # Assert that an IntegrityError is raised when trying to commit a message with a missing non-nullable field
         with self.assertRaises(IntegrityError):
+            # finalizes all the changes made to the database
             db.session.commit()
+        
+        # Undoes uncommitted changes 
+        # clean up the session and reset it for future use
+        db.session.rollback()
 
+        # The length of users' messages should be 0
         self.assertEqual(len(u.messages), 0)
 
 
@@ -139,18 +146,14 @@ class MessageModelTestCase(TestCase):
         """ test a new message gets a timestamp by default """
 
         # Create a valid user for testing (owner of messages)
-        u = User(
-            email="test@test.com",
-            username="testuser",
-            password="HASHED_PASSWORD",
-        )
+        u = self.user
 
         msg = Message(text="testing message", timestamp=None)
 
         # Associate message with the user
         u.messages.append(msg)
 
-        db.session.add(u)
+        # finalizes all the changes made to the database
         db.session.commit()
 
         # Ensure the timestamp is not None
@@ -165,7 +168,9 @@ class MessageModelTestCase(TestCase):
 
         db.session.add(msg_without_user)
 
+        # Assert that an IntegrityError is raised when trying to commit a message with a missing non-nullable field
         with self.assertRaises(IntegrityError):
+            # finalizes all the changes made to the database
             db.session.commit()
 
 
@@ -174,20 +179,20 @@ class MessageModelTestCase(TestCase):
         """ test a message is successfully associated with and returns a user """
 
         # Create a valid user for testing (owner of messages)
-        u = User(
-            email="test@test.com",
-            username="testuser",
-            password="HASHED_PASSWORD",
-        )
+        u = self.user
 
         # Create a message and associate it with the user
         msg = Message(text="testing message model")
 
+        # Associate the message with user
         u.messages.append(msg)
 
-        db.session.add(u)
+        # finalizes all the changes made to the database
         db.session.commit()
 
+        # Verify that the message is correctly associated with the user 
+        # by checking the user object, user ID, username, 
+        # and confirming the message is in the user's messages list.
         self.assertEqual(msg.user, u)
         self.assertEqual(msg.user_id, u.id)
         self.assertEqual(msg.user.username, "testuser")
