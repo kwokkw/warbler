@@ -266,15 +266,10 @@ nav + .container {
   left: 0;
   right: 0;
 
-  /* CHANGES MADE */
-  z-index: -1;
-
-  pointer-events: none;
+  z-index: 1;
 }
 
-#messages .list-group-item a:not(.message-link) 
-/* CHANGES MADE */
-#messages .list-group-item .like-btn {
+#messages .list-group-item a:not(.message-link) {
   position: relative;
   z-index: 2;
 }
