@@ -215,6 +215,31 @@ def profile():
     """Update profile for current user."""
 
     # IMPLEMENT THIS
+    # user authentication    
+    # pre-populate the form with current user's data
+    form = UserEditForm(obj=g.user)
+
+    if form.validate_on_submit():
+        # check if the password provided by user is valid
+        password = form.password.data
+        user = User.authenticate(g.user.username, password)
+
+        if user:
+            # update the user's details based on the form input
+            g.user.username = form.username.data
+            g.user.email = form.email.data
+            g.user.image_url = form.image_url.data
+            g.user.header_image_url = form.header_image_url.data
+            g.user.bio = form.bio.data
+            # commit the changes to the databse
+            db.session.commit()
+            flash("Profile updated successfully!", "success")
+            return redirect(url_for('users_show', user_id=g.user.id))
+        else:
+            flash("invalid password", "danger")
+            return redirect(url_for('homepage'))
+
+    return render_template("users/edit.html", form=form)
 
 
 @app.route('/users/delete', methods=["POST"])
