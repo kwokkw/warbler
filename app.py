@@ -1,11 +1,11 @@
 import os
 
-from flask import Flask, render_template, request, flash, redirect, session, g
+from flask import Flask, render_template, request, flash, redirect, session, g, url_for
 from flask_debugtoolbar import DebugToolbarExtension
 from sqlalchemy.exc import IntegrityError
 
-from forms import UserAddForm, LoginForm, MessageForm
-from models import db, connect_db, User, Message
+from forms import UserAddForm, LoginForm, MessageForm, UserEditForm
+from models import db, connect_db, User, Message, Follows, Likes
 
 CURR_USER_KEY = "curr_user"
 
@@ -13,12 +13,14 @@ app = Flask(__name__)
 
 # Get DB_URI from environ variable (useful for production/testing) or,
 # if not set there, use development local db.
+# app.config['SQLALCHEMY_DATABASE_URI'] = (
+#     os.environ.get('DATABASE_URL', 'postgresql:///warbler'))
 app.config['SQLALCHEMY_DATABASE_URI'] = (
-    os.environ.get('DATABASE_URL', 'postgresql:///warbler'))
+    os.environ.get('DATABASE_URL', 'postgresql://postgres:17273185@localhost/warbler'))
 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ECHO'] = False
-app.config['DEBUG_TB_INTERCEPT_REDIRECTS'] = True
+app.config['DEBUG_TB_INTERCEPT_REDIRECTS'] = False
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', "it's a secret")
 toolbar = DebugToolbarExtension(app)
 
@@ -83,7 +85,7 @@ def signup():
 
         do_login(user)
 
-        return redirect("/")
+        return redirect(url_for('homepage'))
 
     else:
         return render_template('users/signup.html', form=form)
@@ -102,7 +104,7 @@ def login():
         if user:
             do_login(user)
             flash(f"Hello, {user.username}!", "success")
-            return redirect("/")
+            return redirect(url_for('homepage'))
 
         flash("Invalid credentials.", 'danger')
 
@@ -138,7 +140,8 @@ def list_users():
 
     return render_template('users/index.html', users=users)
 
-
+# On a profile page, it should show how many warblers that user has 
+# liked, and this should link to a page showing their liked warbles.
 @app.route('/users/<int:user_id>')
 def users_show(user_id):
     """Show user profile."""
@@ -156,13 +159,33 @@ def users_show(user_id):
     return render_template('users/show.html', user=user, messages=messages)
 
 
+@app.route('/users/<int:user_id>/likes')
+def users_likes(user_id):
+
+    user = User.query.get_or_404(user_id)
+
+    if g.user:
+
+        messages = (Message
+                    .query
+                    .join(Likes, Message.id == Likes.message_id)
+                    .filter(Likes.user_id == g.user.id)
+                    .order_by(Message.timestamp.desc())
+                    .limit(100)
+                    .all())
+
+        likes = [msg.id for msg in g.user.likes]
+
+        return render_template('users/likes.html', user=user, messages=messages, likes=likes)
+
+
 @app.route('/users/<int:user_id>/following')
 def show_following(user_id):
     """Show list of people this user is following."""
 
     if not g.user:
         flash("Access unauthorized.", "danger")
-        return redirect("/")
+        return redirect(url_for('homepage'))
 
     user = User.query.get_or_404(user_id)
     return render_template('users/following.html', user=user)
@@ -174,7 +197,7 @@ def users_followers(user_id):
 
     if not g.user:
         flash("Access unauthorized.", "danger")
-        return redirect("/")
+        return redirect(url_for('homepage'))
 
     user = User.query.get_or_404(user_id)
     return render_template('users/followers.html', user=user)
@@ -186,7 +209,7 @@ def add_follow(follow_id):
 
     if not g.user:
         flash("Access unauthorized.", "danger")
-        return redirect("/")
+        return redirect(url_for('homepage'))
 
     followed_user = User.query.get_or_404(follow_id)
     g.user.following.append(followed_user)
@@ -201,7 +224,7 @@ def stop_following(follow_id):
 
     if not g.user:
         flash("Access unauthorized.", "danger")
-        return redirect("/")
+        return redirect(url_for('homepage'))
 
     followed_user = User.query.get(follow_id)
     g.user.following.remove(followed_user)
@@ -215,7 +238,12 @@ def profile():
     """Update profile for current user."""
 
     # IMPLEMENT THIS
-    # user authentication    
+
+    # user authentication
+    if not g.user:
+        flash("Access unauthorized.", "danger")
+        return redirect(url_for('homepage'))
+    
     # pre-populate the form with current user's data
     form = UserEditForm(obj=g.user)
 
@@ -248,7 +276,7 @@ def delete_user():
 
     if not g.user:
         flash("Access unauthorized.", "danger")
-        return redirect("/")
+        return redirect(url_for('homepage'))
 
     do_logout()
 
@@ -270,7 +298,7 @@ def messages_add():
 
     if not g.user:
         flash("Access unauthorized.", "danger")
-        return redirect("/")
+        return redirect(url_for('homepage'))
 
     form = MessageForm()
 
@@ -298,7 +326,7 @@ def messages_destroy(message_id):
 
     if not g.user:
         flash("Access unauthorized.", "danger")
-        return redirect("/")
+        return redirect(url_for('homepage'))
 
     msg = Message.query.get(message_id)
     db.session.delete(msg)
@@ -320,17 +348,39 @@ def homepage():
     """
 
     if g.user:
+        # Using conditional inner join
+        # Show the last 100 messages only from:
+        #   1. the users that the logged-in user is following
+        #   2. and the logged-in user
+        # `follows` and `messages` tables have no relationship set up
+
         messages = (Message
                     .query
+                    .join(Follows, Message.user_id == Follows.user_being_followed_id)
+                    .filter((Message.user_id==g.user.id) | (Follows.user_following_id==g.user.id))
                     .order_by(Message.timestamp.desc())
                     .limit(100)
                     .all())
 
-        return render_template('home.html', messages=messages)
+        likes = [msg.id for msg in g.user.likes]
+
+        return render_template('home.html', messages=messages, likes=likes)
 
     else:
         return render_template('home-anon.html')
 
+
+# When a user tries to access a resource (such as a webpage) that doesn't exist on the server.
+# 404 means "Not Found"
+# Create a 404 error handler with `@app.errorhandler` decorator
+# This decorator tells Flask to handle 404 errors with `page_not_found` function
+@app.errorhandler(404)
+def page_not_found(e):
+    """ custom 404 error page """
+
+    # `, 404`: sets the status code of the HTTP response to 404
+    # without `, 404`, Flask would return a `200 OK` response along with `404.html`
+    return render_template('404.html', error=e), 404
 
 ##############################################################################
 # Turn off all caching in Flask
@@ -348,3 +398,47 @@ def add_header(req):
     req.headers["Expires"] = "0"
     req.headers['Cache-Control'] = 'public, max-age=0'
     return req
+
+
+#############################################################################
+# LIKES ROUTE
+
+@app.route('/users/add_like/<int:msg_id>', methods=["POST"])
+def toggle_like(msg_id):
+    """ Allow a user to like a warble written by other users """
+
+    # Check if the user is logged in
+    if not g.user:
+        flash("Access unauthorized.", "danger")
+        return redirect(url_for('homepage'))
+
+    message = Message.query.get_or_404(msg_id)
+
+    # Ensure the logged-in user cannot like their own warble
+    if message.user_id == g.user.id:
+        flash("You cannot like your own warble.", "danger")
+        return redirect(url_for('homepage'))
+    
+    # Update liked messsage 
+    if message in g.user.likes:
+        g.user.likes.remove(message)
+    else: 
+        g.user.likes.append(message)
+
+    # Update database
+    db.session.commit()
+
+    return redirect(url_for('homepage'))
+
+    # NOT ABLE TO TOGGLE A LIKED MESSAGE
+    # 
+    # 1ST ATTEMPT: Passed the `likes` variable to `url_for` 
+    # Extraced a list of id from the `g.user.likes` and assigned the value to `likes`
+    # This resulted a multiple query string in the url as follow:
+    # http://127.0.0.1:5000/?likes=222&likes=767&likes=784
+    # 
+    # 2ND ATTEMPT: Inspecting `homepage` route
+    # `likes` was not defined and passed to the template
+
+
+
