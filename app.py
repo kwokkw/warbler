@@ -1,11 +1,16 @@
 import os
 
-from flask import Flask, render_template, request, flash, redirect, session, g, url_for
+from flask import Flask, render_template, request, flash, redirect, session, g, url_for, jsonify
 from flask_debugtoolbar import DebugToolbarExtension
 from sqlalchemy.exc import IntegrityError
 
-from forms import UserAddForm, LoginForm, MessageForm, UserEditForm
+from forms import UserAddForm, LoginForm, MessageForm, UserEditForm, ChangePasswordForm
 from models import db, connect_db, User, Message, Follows, Likes
+from sqlalchemy.orm import joinedload
+
+# `functools` provides higher-order functions (functions that act or return other functions)
+# One of the tools it provides is `wraps`
+from functools import wraps
 
 CURR_USER_KEY = "curr_user"
 
@@ -40,6 +45,48 @@ def add_user_to_g():
 
     else:
         g.user = None
+
+@app.before_request
+def add_new_message_form_to_g():
+    """ Add new message form to g """
+
+    # Skip certain endpoints where the form should not be passed. 
+    if request.endpoint not in ['page_not_found']:
+
+        # Add the form to g object if the user is logged-in
+        if g.user:
+            g.message_form = MessageForm()
+        else:
+            g.message_form = None
+
+
+# Basic login required decorator.
+# `f` is the ORIGINAL FUNCTION we want to protect (like a route function).
+def login_required(f):
+
+    # decorator from the `functools` module.
+    # wraps the original function `f`
+    # ensure the original function's name and documentation are preserved 
+    @wraps(f) 
+
+    # inner function adds new behavior (checking if the user is logged) 
+    # before calling the original function.
+    # *args, **kwargs are used to pass an arbitrary number of positional and 
+    # keyword arguments to a function.
+    def check_login(*args, **kwargs):
+
+        # check if the user is logged in
+        if not g.user:
+            flash("Access unauthorized.", "danger")
+            return redirect(url_for('homepage'))
+
+        # if logged in, call the original function `f`(the route handler).
+        # this ensures that the decorated function can accept any arguments
+        # the original function would accept. 
+        return f(*args, **kwargs)
+
+    # This happens (execute) first because it's the step where the original function is wrapped by `check_login`
+    return check_login
 
 
 def do_login(user):
@@ -148,6 +195,11 @@ def users_show(user_id):
 
     user = User.query.get_or_404(user_id)
 
+    # Check if the current user has access to the user profile
+    if not user.can_view_profile(g.user):
+        flash("This is a private accoute. Follow request required.", 'danger')
+        return redirect(url_for('homepage'))
+
     # snagging messages in order from the database;
     # user.messages won't be in order by default
     messages = (Message
@@ -180,70 +232,74 @@ def users_likes(user_id):
 
 
 @app.route('/users/<int:user_id>/following')
+@login_required
 def show_following(user_id):
     """Show list of people this user is following."""
-
-    if not g.user:
-        flash("Access unauthorized.", "danger")
-        return redirect(url_for('homepage'))
 
     user = User.query.get_or_404(user_id)
     return render_template('users/following.html', user=user)
 
 
 @app.route('/users/<int:user_id>/followers')
+@login_required
 def users_followers(user_id):
     """Show list of followers of this user."""
-
-    if not g.user:
-        flash("Access unauthorized.", "danger")
-        return redirect(url_for('homepage'))
 
     user = User.query.get_or_404(user_id)
     return render_template('users/followers.html', user=user)
 
 
 @app.route('/users/follow/<int:follow_id>', methods=['POST'])
+@login_required
 def add_follow(follow_id):
     """Add a follow for the currently-logged-in user."""
 
-    if not g.user:
-        flash("Access unauthorized.", "danger")
-        return redirect(url_for('homepage'))
-
     followed_user = User.query.get_or_404(follow_id)
-    g.user.following.append(followed_user)
+
+    # Check if the account is private
+    if followed_user.is_private:
+
+        # Add a follow request
+        follow = Follows(user_being_followed_id=followed_user.id, user_following_id=g.user.id, is_approved=False)
+
+        db.session.add(follow)
+        flash('Follow request sent. Wait for approval.', 'info')
+    
+    else:
+        # If the account is public
+        # approve follow directly
+        g.user.following.append(followed_user)
+        flash(f'You are now following {followed_user.username}.', 'success')
+        
     db.session.commit()
 
-    return redirect(f"/users/{g.user.id}/following")
+    # if is_approved is False, 
+    #   send a follow request 
+    #   redirect to `approve_follow` route 
+
+    return redirect(url_for('show_following', user_id=g.user.id))
 
 
 @app.route('/users/stop-following/<int:follow_id>', methods=['POST'])
+@login_required
 def stop_following(follow_id):
     """Have currently-logged-in-user stop following this user."""
-
-    if not g.user:
-        flash("Access unauthorized.", "danger")
-        return redirect(url_for('homepage'))
 
     followed_user = User.query.get(follow_id)
     g.user.following.remove(followed_user)
     db.session.commit()
 
-    return redirect(f"/users/{g.user.id}/following")
+    return redirect(url_for('show_following', user_id=g.user.id))
 
 
 @app.route('/users/profile', methods=["GET", "POST"])
+@login_required
 def profile():
     """Update profile for current user."""
 
     # IMPLEMENT THIS
 
-    # user authentication
-    if not g.user:
-        flash("Access unauthorized.", "danger")
-        return redirect(url_for('homepage'))
-    
+    # user authentication    
     # pre-populate the form with current user's data
     form = UserEditForm(obj=g.user)
 
@@ -271,34 +327,28 @@ def profile():
 
 
 @app.route('/users/delete', methods=["POST"])
+@login_required
 def delete_user():
     """Delete user."""
-
-    if not g.user:
-        flash("Access unauthorized.", "danger")
-        return redirect(url_for('homepage'))
 
     do_logout()
 
     db.session.delete(g.user)
     db.session.commit()
 
-    return redirect("/signup")
+    return redirect(url_for('signup'))
 
 
 ##############################################################################
 # Messages routes:
 
 @app.route('/messages/new', methods=["GET", "POST"])
+@login_required
 def messages_add():
     """Add a message:
 
     Show form if GET. If valid, update message and redirect to user page.
     """
-
-    if not g.user:
-        flash("Access unauthorized.", "danger")
-        return redirect(url_for('homepage'))
 
     form = MessageForm()
 
@@ -307,7 +357,7 @@ def messages_add():
         g.user.messages.append(msg)
         db.session.commit()
 
-        return redirect(f"/users/{g.user.id}")
+        return redirect(url_for('users_show', user_id=g.user.id))
 
     return render_template('messages/new.html', form=form)
 
@@ -321,18 +371,15 @@ def messages_show(message_id):
 
 
 @app.route('/messages/<int:message_id>/delete', methods=["POST"])
+@login_required
 def messages_destroy(message_id):
     """Delete a message."""
-
-    if not g.user:
-        flash("Access unauthorized.", "danger")
-        return redirect(url_for('homepage'))
 
     msg = Message.query.get(message_id)
     db.session.delete(msg)
     db.session.commit()
 
-    return redirect(f"/users/{g.user.id}")
+    return redirect(url_for('users_show', user_id=g.user.id))
 
 
 ##############################################################################
@@ -356,6 +403,7 @@ def homepage():
 
         messages = (Message
                     .query
+                    .options(joinedload(Message.user)) # Eagerly load the user 
                     .join(Follows, Message.user_id == Follows.user_being_followed_id)
                     .filter((Message.user_id==g.user.id) | (Follows.user_following_id==g.user.id))
                     .order_by(Message.timestamp.desc())
@@ -404,31 +452,28 @@ def add_header(req):
 # LIKES ROUTE
 
 @app.route('/users/add_like/<int:msg_id>', methods=["POST"])
+@login_required
 def toggle_like(msg_id):
     """ Allow a user to like a warble written by other users """
 
     # Check if the user is logged in
-    if not g.user:
-        flash("Access unauthorized.", "danger")
-        return redirect(url_for('homepage'))
-
     message = Message.query.get_or_404(msg_id)
 
     # Ensure the logged-in user cannot like their own warble
     if message.user_id == g.user.id:
         flash("You cannot like your own warble.", "danger")
-        return redirect(url_for('homepage'))
-    
-    # Update liked messsage 
+        return redirect(url_for('homepage'))    # Update liked messsage 
     if message in g.user.likes:
         g.user.likes.remove(message)
+        # Update database
+        db.session.commit()
+        return jsonify({'liked':False})
     else: 
         g.user.likes.append(message)
+        # Update database
+        db.session.commit()
+        return jsonify({'liked':True})
 
-    # Update database
-    db.session.commit()
-
-    return redirect(url_for('homepage'))
 
     # NOT ABLE TO TOGGLE A LIKED MESSAGE
     # 
@@ -441,4 +486,80 @@ def toggle_like(msg_id):
     # `likes` was not defined and passed to the template
 
 
+#############################################################################
+# PASSWORD CHANGE ROUTE
+
+@app.route('/change_password', methods=['GET', 'POST'])
+# Check if the user is logged in 
+@login_required
+def change_password():
+
+    form = ChangePasswordForm()
+
+    if form.validate_on_submit():
+
+        # Validate the current password and change to the new one 
+        if g.user.change_password(form.current_password.data, form.new_password.data):
+            flash("Password successfully updated.", "success")
+            return redirect(url_for('users_show', user_id=g.user.id))
+        else:
+            flash("Incorrect current password.", "danger")
+
+    return render_template('/users/change_password.html', form=form)
+
+
+#############################################################################
+# APPROVING FOLLOWERS ROUTES
+
+@app.route('/users/<int:user_id>/pending_follow_requests')
+@login_required
+def view_pending_follow_request(user_id):
+    """ View all pending follow requests for a private account. """
+
+    # how do i know if there is a pending request
+    pending_requests = (Follows.query
+                               .filter_by(user_being_followed_id=user_id, is_approved=False)
+                               .all())
+
+    return render_template('/users/pending_follow_requests.html', pending_requests=pending_requests)
+
+
+@app.route('/users/approve_follow/<int:follow_id>', methods=['POST'])
+@login_required
+def approve_follow(follow_id):
+    """ Approve a follow request for the current user. """
+
+    follow = Follows.query.filter_by(user_being_followed_id=g.user.id, user_following_id=follow_id, is_approved=False).first()
+
+    if not follow:
+        flash('There is an error while approving follow request. Try again.', 'danger')
+        return redirect(url_for('view_pending_follow_request', user_id=g.user.id))
+
+    # Approve the follow request
+    follow.is_approved = True
+    flash(f'Follow request from {follow.user_following.username} approved.', 'success')
+
+    db.session.commit()
+
+    return redirect(url_for('view_pending_follow_request', user_id=g.user.id))
+
+
+@app.route('/users/deny_follow/<int:follow_id>', methods=['POST'])
+@login_required
+def deny_follow(follow_id):
+    """Deny a follow request for the current user."""
+
+    follow = Follows.query.filter_by(user_being_followed_id=g.user.id, user_following_id=follow_id, is_approved=False).first()
+
+    if not follow:
+        flash('There is an error while denying follow request. Try again.', 'danger')
+        return redirect(url_for('homepage'))
+
+    # Remove the follow request (deny)
+    db.session.delete(follow)
+    flash(f"Follow request from {follow.user_following.username} denied.", "info")
+
+    db.session.commit()
+
+    return redirect(url_for('view_pending_follow_requests', user_id=g.user.id))
 

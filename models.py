@@ -21,6 +21,12 @@ class Follows(db.Model):
     # Specifies the name of database table
     __tablename__ = 'follows'
 
+    # To track the approval status of follow requests for private accounts
+    is_approved = db.Column(
+        db.Boolean, 
+        default=False
+    )
+
     # Define a foreign key column for user being followed
     # `ondelete="cascade"`, if a user is deleted from the user table, 
     # all corresponding entries in the follows table will also be deleted
@@ -38,6 +44,10 @@ class Follows(db.Model):
         db.ForeignKey('users.id', ondelete="cascade"),
         primary_key=True,
     )
+
+    # `user_following_id` should be used to link this relationship to `User`.
+    user_following = db.relationship('User', foreign_keys=[user_following_id])
+
 
 
 class Likes(db.Model):
@@ -130,6 +140,13 @@ class User(db.Model):
         nullable=False,
     )
 
+    # define a private account
+    # indicate whether the user account is private or public
+    is_private = db.Column(
+        db.Boolean,
+        default=False
+    )
+
     # Establishes a one-to-many relationship with `Message` Model ("one" side)
     # Can get list of messages objects from user with `.messages`
     # `users` is the referenced table
@@ -192,6 +209,69 @@ class User(db.Model):
         found_user_list = [user for user in self.following if user == other_user]
         # Returns True if other_user is found, else Flase
         return len(found_user_list) == 1
+    
+    def change_password(self, current_password, new_password):
+        """ Handle the password change """
+    
+        # Check if if the provided current password matches the stored hash
+        if not bcrypt.check_password_hash(self.password, current_password):
+            # Password change failed
+            # The current password provided by the user does not match the one in the database.
+            return False
+
+        # Hashes the new password using Bcrypt and update user password
+        self.password = bcrypt.generate_password_hash(new_password).decode('UTF-8')
+
+        # Save the user with the new password
+        db.session.commit()
+
+        # Password change successful
+        return True
+
+    ############### Allow “Private” Accounts methods
+
+    # Helper (TODO: IS THIS UNNECCSSARY)
+    # def check_is_private(self):
+        # """ Checks whether a user has set their account to private. """
+
+        # Returns `True` if the account is private.
+        # `False` if the account is public.
+        # return self.is_private
+
+    def can_view_profile(self, viewer):
+        """ Checks whether a specific viewer (another user or the currently logged-in user) is allowed to view the profile of the current user. """
+
+        # if the current user profile is public,
+        # Viewer can view the profile.
+        if not self.is_private:
+            return True
+
+        # if the current user profile is private, 
+
+        # If the viewer is the profile owner, allow viewing 
+        if viewer == self:
+            return True
+
+        # Checks if the `viewer` is following the owner of the profile, and if the follow request has been approved,
+        approved_follow = Follows.query.filter_by(is_approved=True, user_being_followed_id = self.id, user_following_id = viewer.id).first()
+
+        # If `approved_follow` object is found(<Follows 144, 303>), return `True`
+        # If `approved_follow` is `None`, return `False`
+        return approved_follow
+
+    def approve_follow(self, follower):
+        """ Used by private account holder to approve a follow request """
+
+        # Finds the follow request in the `follows` table
+        follow = Follows.query.filter_by(self.id==user_being_followed_id, follower.id==user_following_id).first()
+
+        # TODO: UPDATE CONDITION
+        if follow:
+            follow.is_approved = True
+            db.session.commit()
+        
+
+    ################################################
 
     @classmethod
     def signup(cls, username, email, password, image_url):
